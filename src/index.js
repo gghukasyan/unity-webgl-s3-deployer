@@ -4,6 +4,8 @@ var s3 = require('s3');
 var fs = require('fs');
 var path = require('path');
 var glob = require('glob');
+var nodemailer = require('nodemailer');
+var sesTransport = require('nodemailer-ses-transport');
 
 var argv = require('optimist')
 	.usage('Deploys unity webgl folder to server.\nUsage webgl-s3-deploy --src /PATH/TO/SRC --bucket BUCKET_NAME --key AWS_KEY --secret AWS_SECRET')
@@ -63,6 +65,36 @@ function createSyncDirectory(){
 	}
 }
 
+
+function clearS3(){
+	clearIndexS3();
+}
+
+function clearIndexS3(){
+	var params = {
+		Bucket: bucket,
+		Delete:{
+			Objects:[{Key:"index.html"}]
+		}
+	};
+	var deleter = s3Client.deleteObjects(params);
+	deleter.on('end', function() {
+		clearReleaseS3();
+	});
+}
+
+function clearReleaseS3(){
+	var params = {
+		Bucket: bucket,
+		Prefix:"Release"
+	};
+	var deleter = s3Client.deleteDir(params);
+	deleter.on('end', function() {
+		syncIndexS3();
+	});
+}
+
+
 function syncIndexS3() {
 	var params = {
 		localFile: syncDir + "/index.html",
@@ -105,35 +137,32 @@ function syncReleaseS3(){
 	});
 	uploader.on('end', function() {
 		deleteFolderRecursive(syncDir);
+		sendDeploymentMail();
 		console.log("done uploading");
 	});
 }
 
-function clearS3(){
-	clearIndexS3();
-}
-
-function clearIndexS3(){
-	var params = {
-		Bucket: bucket,
-		Delete:{
-			Objects:[{Key:"index.html"}]
+function sendDeploymentMail(){
+	var transporter = nodemailer.createTransport(sesTransport({
+		accessKeyId: argv.key,
+		secretAccessKey: argv.secret,
+		rateLimit: 4
+	}));
+	var mailOptions = {
+		from: 'deployment@doublecoconut.com',
+		to: 'vincideploy@doublecoconut.com',
+		subject: 'Deployment Completed',
+		html: '<div>Hi Team,</div>' +
+		'<div>New version Of <b>' + bucket +'</b> uploaded.</div> ' +
+		'<div>Click <a href="http://s3.amazonaws.com/' + bucket + '/index.html">here</a> to open game.</div>' +
+		'<div>Double Coconut Team</div>'
+	};
+	transporter.sendMail(mailOptions, function(error, info){
+		if(error){
+			console.log(error);
+		}else{
+			console.log('Message sent: ' + info.response);
 		}
-	};
-	var deleter = s3Client.deleteObjects(params);
-	deleter.on('end', function() {
-		clearReleaseS3();
-	});
-}
-
-function clearReleaseS3(){
-	var params = {
-		Bucket: bucket,
-		Prefix:"Release"
-	};
-	var deleter = s3Client.deleteDir(params);
-	deleter.on('end', function() {
-		syncIndexS3();
 	});
 }
 
