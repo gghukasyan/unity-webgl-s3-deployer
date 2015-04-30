@@ -43,53 +43,71 @@ var s3Client = s3.createClient({
 	}
 });
 
-function startDeployment(){
+function startDeployment() {
 	createSyncDirectory();
 	clearS3();
 }
 
-function createSyncDirectory(){
+function createSyncDirectory() {
 	var compressedFiles = glob.sync(source + "/Compressed/*");
+	var tempalateDataFiles = glob.sync(source + "/TemplateData/*");
 	deleteFolderRecursive(syncDir);
 	fs.mkdirSync(syncDir);
 	fs.mkdirSync(syncDir + "/Release");
+	fs.mkdirSync(syncDir + "/TemplateData");
 	fs.writeFileSync(
 		syncDir + "/index.html",
 		fs.readFileSync(source + "/index.html")
 	);
-	for(var i = 0; i < compressedFiles.length; i++){
+	for (var i = 0; i < compressedFiles.length; i++) {
 		var file = compressedFiles[i];
 		var fileName = path.basename(file);
 		var targetFileName = fileName.replace(new RegExp('gz$'), '');
-		fs.writeFileSync(syncDir + "/Release/"+targetFileName, fs.readFileSync(file));
+		fs.writeFileSync(syncDir + "/Release/" + targetFileName, fs.readFileSync(file));
+	}
+	for (var i = 0; i < tempalateDataFiles.length; i++) {
+		var file = tempalateDataFiles[i];
+		var fileName = path.basename(file);
+		fs.writeFileSync(syncDir + "/TemplateData/" + fileName, fs.readFileSync(file));
 	}
 }
 
 
-function clearS3(){
+function clearS3() {
 	clearIndexS3();
 }
 
-function clearIndexS3(){
+function clearIndexS3() {
 	var params = {
 		Bucket: bucket,
-		Delete:{
-			Objects:[{Key:"index.html"}]
+		Delete: {
+			Objects: [{Key: "index.html"}]
 		}
 	};
 	var deleter = s3Client.deleteObjects(params);
-	deleter.on('end', function() {
+	deleter.on('end', function () {
 		clearReleaseS3();
 	});
 }
 
-function clearReleaseS3(){
+function clearReleaseS3() {
 	var params = {
 		Bucket: bucket,
-		Prefix:"Release"
+		Prefix: "Release"
 	};
 	var deleter = s3Client.deleteDir(params);
-	deleter.on('end', function() {
+	deleter.on('end', function () {
+		clearTemplateDataS3();
+	});
+}
+
+function clearTemplateDataS3() {
+	var params = {
+		Bucket: bucket,
+		Prefix: "TemplateData"
+	};
+	var deleter = s3Client.deleteDir(params);
+	deleter.on('end', function () {
 		syncIndexS3();
 	});
 }
@@ -102,22 +120,22 @@ function syncIndexS3() {
 		s3Params: {
 			Bucket: bucket,
 			Key: "index.html",
-			ACL:"public-read"
+			ACL: "public-read"
 		}
 	};
 	var uploader = s3Client.uploadFile(params);
-	uploader.on('error', function(err) {
+	uploader.on('error', function (err) {
 		console.error("unable to sync:", err.stack);
 	});
-	uploader.on('progress', function() {
+	uploader.on('progress', function () {
 		process.stdout.write("progress " + uploader.progressAmount + "/" + uploader.progressTotal + "\r");
 	});
-	uploader.on('end', function() {
+	uploader.on('end', function () {
 		syncReleaseS3();
 	});
 }
 
-function syncReleaseS3(){
+function syncReleaseS3() {
 	var params = {
 		localDir: syncDir + "/Release",
 		deleteRemoved: true,
@@ -125,24 +143,46 @@ function syncReleaseS3(){
 			Bucket: bucket,
 			Prefix: "Release/",
 			ContentEncoding: 'gzip',
-			ACL:"public-read"
+			ACL: "public-read"
 		}
 	};
 	var uploader = s3Client.uploadDir(params);
-	uploader.on('error', function(err) {
+	uploader.on('error', function (err) {
 		console.error("unable to sync:", err.stack);
 	});
-	uploader.on('progress', function() {
+	uploader.on('progress', function () {
 		process.stdout.write("progress " + uploader.progressAmount + "/" + uploader.progressTotal + "\r");
 	});
-	uploader.on('end', function() {
-		deleteFolderRecursive(syncDir);
+	uploader.on('end', function () {
+		syncTemplateDataS3();
+	});
+}
+
+function syncTemplateDataS3() {
+	var params = {
+		localDir: syncDir + "/TemplateData",
+		deleteRemoved: true,
+		s3Params: {
+			Bucket: bucket,
+			Prefix: "TemplateData/",
+			ACL: "public-read"
+		}
+	};
+	var uploader = s3Client.uploadDir(params);
+	uploader.on('error', function (err) {
+		console.error("unable to sync:", err.stack);
+	});
+	uploader.on('progress', function () {
+		process.stdout.write("progress " + uploader.progressAmount + "/" + uploader.progressTotal + "\r");
+	});
+	uploader.on('end', function () {
 		sendDeploymentMail();
+		deleteFolderRecursive(syncDir);
 		console.log("done uploading");
 	});
 }
 
-function sendDeploymentMail(){
+function sendDeploymentMail() {
 	var transporter = nodemailer.createTransport(sesTransport({
 		accessKeyId: argv.key,
 		secretAccessKey: argv.secret,
@@ -153,24 +193,24 @@ function sendDeploymentMail(){
 		to: 'vincideploy@doublecoconut.com',
 		subject: 'Deployment Completed',
 		html: '<div>Hi Team,</div>' +
-		'<div>New version Of <b>' + bucket +'</b> uploaded.</div> ' +
+		'<div>New version Of <b>' + bucket + '</b> uploaded.</div> ' +
 		'<div>Click <a href="http://s3.amazonaws.com/' + bucket + '/index.html">here</a> to open game.</div>' +
 		'<div>Double Coconut Team</div>'
 	};
-	transporter.sendMail(mailOptions, function(error, info){
-		if(error){
+	transporter.sendMail(mailOptions, function (error, info) {
+		if (error) {
 			console.log(error);
-		}else{
+		} else {
 			console.log('Message sent: ' + info.response);
 		}
 	});
 }
 
 function deleteFolderRecursive(path) {
-	if( fs.existsSync(path) ) {
-		fs.readdirSync(path).forEach(function(file){
+	if (fs.existsSync(path)) {
+		fs.readdirSync(path).forEach(function (file) {
 			var curPath = path + "/" + file;
-			if(fs.lstatSync(curPath).isDirectory()) { // recurse
+			if (fs.lstatSync(curPath).isDirectory()) { // recurse
 				deleteFolderRecursive(curPath);
 			} else { // delete file
 				fs.unlinkSync(curPath);
